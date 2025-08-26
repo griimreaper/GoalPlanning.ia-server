@@ -16,9 +16,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import HttpResponse
+
+def home(request):
+    return HttpResponse("Bienvenido a GoalPlanning API")
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('', home),
     path('goals/', include('goals.urls')),   # Nueva app goals
     path('users/', include('users.urls')),   # Nueva app users
 ]
