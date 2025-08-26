@@ -1,4 +1,4 @@
-# GoalPlanning
+# GoalPlanning.IA Server
 
 [![Python](https://img.shields.io/badge/python-3.13-blue)](https://www.python.org/)
 [![Django](https://img.shields.io/badge/django-5.2.5-green)](https://www.djangoproject.com/)
@@ -30,3 +30,34 @@ GoalPlanning es una aplicación backend desarrollada en Django que permite a los
 ```bash
 git clone https://github.com/tu-usuario/goalplanning.git
 cd goalplanning
+```
+2. Crear un entorno virtual y activarlo:
+```bash
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# macOS/Linux
+source venv/bin/activate
+```
+3. Instalar dependencias:
+```bash
+pip install -r requirements.txt
+```
+4. Configurar variables de entorno:
+```bash
+cp .env.example .env
+# Edita .env con tus datos de configuración, por ejemplo DATABASE_URL
+```
+5. Aplicar migraciones:
+```bash
+python manage.py migrate
+```
+6. Crear un superusuario para administración:
+```bash
+python manage.py createsuperuser
+```
+7. Ejecutar el servidor de desarrollo:
+```bash
+python manage.py runserver
+```
+
