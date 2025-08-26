@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.sqlite3
+*.env
+
+# Django
+/staticfiles/
+media/
+*.log
+
+# VSCode
+.vscode/
+
+# EAS / Expo
+node_modules/
+.expo/
+.env
