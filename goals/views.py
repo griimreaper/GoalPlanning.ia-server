@@ -11,11 +11,29 @@ from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from .serializers import GoalSerializer
 from rest_framework import status
+from googleapiclient.discovery import build
+import os
 
 load_dotenv()
 client = genai.Client()
 
 hoy = date.today().strftime("%Y-%m-%d")
+
+def get_youtube_first_video(query: str) -> str:
+    api_key = os.getenv("YOUTUBE_API_KEY")
+    youtube = build('youtube', 'v3', developerKey=api_key)
+    request = youtube.search().list(
+        part="snippet",
+        q=query,
+        type="video",
+        maxResults=1
+    )
+    response = request.execute()
+    items = response.get("items", [])
+    if not items:
+        return ""
+    video_id = items[0]["id"]["videoId"]
+    return f"https://www.youtube.com/watch?v={video_id}"
 
 @api_view(['POST'])
 def generate_objectives(request):
@@ -37,7 +55,7 @@ Plazo: {plazo_dias} días
 Disponibilidad diaria: {disponibilidad}
 Genera un plan de objetivos diarios empezando desde hoy ({hoy}), la cantidad de objetivos debe ser acorde al plazo fijado por el usuario.
 - Cada objetivo debe incluir: título, descripción, fecha y hora exacta (no solo la fecha), basadas en la disponibilidad horaria del usuario.
-- Opcional: 2 frases de búsqueda en YouTube.
+- 1 frases de búsqueda en YouTube.
 Devuelve la respuesta en JSON con el formato:
 {{
   "goal": {{"title": "...", "plazo_dias": X, "disponibilidad": "..."}},
@@ -81,15 +99,17 @@ Devuelve la respuesta en JSON con el formato:
         # La IA debe entregar fecha + hora en 'deadline'
         scheduled_at = datetime.strptime(obj['deadline'], "%Y-%m-%d %H:%M")
 
+        # Buscar el primer video de YouTube según título o descripción
+        youtube_link = get_youtube_first_video(obj.get('youtube_search'))
+
         Objective.objects.create(
             goal=goal,
             title=obj.get('title', ''),
             description=obj.get('description', ''),
             scheduled_at=scheduled_at,
-            youtube_links=obj.get('youtube_search', ''),
+            youtube_links=youtube_link,
             status='pending'
         )
-
 
     return Response({"goal_id": goal.id}, status=201)
 
@@ -225,14 +245,14 @@ El usuario dio este feedback:
 Tu tarea es reescribir o ajustar el objetivo para que:
 - Se mantenga alineado con la meta general.
 - Se adapte mejor al nivel de dificultad, interés y tiempo del usuario.
-- Opcionalmente, sugiere un enlace de YouTube actualizado si aplica.
+- 1 frases de búsqueda en YouTube.
 
 Devuelve SOLO un JSON con el formato:
 {{
   "title": "...",
   "description": "...",
   "scheduled_at": "YYYY-MM-DD HH:MM",
-  "youtube_links": "..."
+  "youtube_search": "..."
 }}
 """
 
@@ -262,8 +282,8 @@ Devuelve SOLO un JSON con el formato:
             objective.scheduled_at = datetime.strptime(new_data["scheduled_at"], "%Y-%m-%d %H:%M")
         except ValueError:
             pass
-    if "youtube_links" in new_data:
-        objective.youtube_links = new_data["youtube_links"]
+    if "youtube_search" in new_data:
+        objective.youtube_links = get_youtube_first_video(new_data['youtube_search'])
 
     objective.save()
 
@@ -320,8 +340,10 @@ Agrega {days_to_add} nuevos objetivos diarios empezando desde el día siguiente.
 - Comentario adicional del usuario: {comment}
 
 Devuelve SOLO un JSON con la clave "objectives":
+- Cada objetivo debe incluir: título, descripción, fecha y hora exacta (no solo la fecha), basadas en la disponibilidad horaria del usuario.
+- 1 frases de búsqueda en YouTube.
 [
-  {{"title": "...", "description": "...", "scheduled_at": "YYYY-MM-DD HH:MM", youtube_links": "..."}},
+  {{"title": "...", "description": "...", "scheduled_at": "YYYY-MM-DD HH:MM", youtube_search": "..."}},
   ...
 ]
 """
@@ -343,6 +365,9 @@ Devuelve SOLO un JSON con la clave "objectives":
     for obj in new_objectives_data:
         try:
             scheduled_at = datetime.strptime(obj['scheduled_at'], "%Y-%m-%d %H:%M")
+
+            # Buscar el primer video de YouTube según título o descripción
+            youtube_link = get_youtube_first_video(obj.get('youtube_search'))
         except ValueError:
             scheduled_at = start_date
         new_obj = Objective.objects.create(
@@ -350,6 +375,7 @@ Devuelve SOLO un JSON con la clave "objectives":
             title=obj.get('title', ''),
             description=obj.get('description', ''),
             scheduled_at=scheduled_at,
+            youtube_links=youtube_link,
             status='pending'
         )
         created_objectives.append({
@@ -357,6 +383,7 @@ Devuelve SOLO un JSON con la clave "objectives":
             "title": new_obj.title,
             "description": new_obj.description,
             "scheduled_at": new_obj.scheduled_at,
+            "youtube_links": youtube_link,
             "status": new_obj.status
         })
 
