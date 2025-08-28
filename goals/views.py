@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from datetime import date, datetime, timedelta
 import json, re
 from .models import Goal, Objective
-from django.contrib.auth.models import User
 from django.shortcuts import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from .serializers import GoalSerializer
@@ -46,6 +45,15 @@ def generate_objectives(request):
     if not meta or not plazo_dias or not disponibilidad:
         return Response({"error": "Faltan parámetros"}, status=400)
 
+    # Campos opcionales
+    level = data.get("level")
+    formats = data.get("formats")  # lista
+    session_length = data.get("session_length")
+    focus = data.get("focus")
+    language = data.get("language")
+    checkpoints = data.get("checkpoints")
+    location = data.get("location")
+
     hoy = date.today().strftime("%Y-%m-%d")
 
     prompt = f"""
@@ -53,12 +61,33 @@ Eres un asistente que planifica metas de aprendizaje de manera práctica.
 Meta del usuario: "{meta}"
 Plazo: {plazo_dias} días
 Disponibilidad diaria: {disponibilidad}
+
+# Opcionales
+Nivel: {level or 'no especificado'}
+Formatos: {', '.join(formats) if formats else 'no especificado'}
+Duración de sesión (minutos): {session_length or 'no especificado'}
+Enfoque: {focus or 'no especificado'}
+Idioma: {language or 'es'}
+Checkpoints: {checkpoints or 'weekly'}
+País: {location.get('country', {}).get('name') if location else 'no especificado'}
+
 Genera un plan de objetivos diarios empezando desde hoy ({hoy}), la cantidad de objetivos debe ser acorde al plazo fijado por el usuario.
-- Cada objetivo debe incluir: título, descripción, fecha y hora exacta (no solo la fecha), basadas en la disponibilidad horaria del usuario.
-- 1 frases de búsqueda en YouTube.
+- Cada objetivo debe incluir: título, descripción, fecha y hora exacta en **formato UTC** (YYYY-MM-DD HH:MM), basadas en la disponibilidad horaria y ubicacion del usuario.
+- 1 frase de búsqueda en YouTube.
+
 Devuelve la respuesta en JSON con el formato:
 {{
-  "goal": {{"title": "...", "plazo_dias": X, "disponibilidad": "..."}},
+  "goal": {{
+      "title": "...",
+      "plazo_dias": X,
+      "disponibilidad": "...",
+      "level": "...",
+      "formats": ["..."],
+      "session_length": ...,
+      "focus": "...",
+      "language": "...",
+      "checkpoints": "..."
+  }},
   "objectives": [
     {{"title": "...", "description": "...", "deadline": "YYYY-MM-DD HH:MM", "youtube_search": "URL"}},
     ...
@@ -87,19 +116,27 @@ Devuelve la respuesta en JSON con el formato:
 
     goal_data = ia_data["goal"]
     deadline = date.today() + timedelta(days=int(goal_data["plazo_dias"]))
+
+    # Crear Goal incluyendo campos nuevos
     goal = Goal.objects.create(
         user=user,
         title=goal_data["title"],
         deadline=deadline,
         availability=goal_data.get("disponibilidad", ""),
-        state="pending"
+        state="pending",
+        level=goal_data.get("level"),
+        formats=goal_data.get("formats") or [],
+        session_length=goal_data.get("session_length"),
+        focus=goal_data.get("focus"),
+        language=goal_data.get("language"),
+        checkpoints=goal_data.get("checkpoints"),
+        country_code=location.get("country", {}).get("code") if location else None,
+        country_name=location.get("country", {}).get("name") if location else None
     )
 
+    # Crear objectives
     for obj in ia_data.get("objectives", []):
-        # La IA debe entregar fecha + hora en 'deadline'
         scheduled_at = datetime.strptime(obj['deadline'], "%Y-%m-%d %H:%M")
-
-        # Buscar el primer video de YouTube según título o descripción
         youtube_link = get_youtube_first_video(obj.get('youtube_search'))
 
         Objective.objects.create(
@@ -108,7 +145,8 @@ Devuelve la respuesta en JSON con el formato:
             description=obj.get('description', ''),
             scheduled_at=scheduled_at,
             youtube_links=youtube_link,
-            status='pending'
+            status='pending',
+            image_url=""
         )
 
     return Response({"goal_id": goal.id}, status=201)
@@ -117,21 +155,25 @@ Devuelve la respuesta en JSON con el formato:
 @permission_classes([IsAuthenticated])
 def get_goals(request):
     """
-    Devuelve todas las metas del usuario autenticado (sin objetivos).
+    Devuelve todas las metas del usuario autenticado con progreso calculado.
     """
     user = request.user
     metas = Goal.objects.filter(user=user).order_by('-id')  # las más recientes primero
 
-    resultado = [
-        {
+    resultado = []
+    for goal in metas:
+        total_objectives = goal.objectives.count()
+        done_objectives = goal.objectives.filter(status='done').count()
+        progress = round((done_objectives / total_objectives) * 100, 2) if total_objectives > 0 else 0
+
+        resultado.append({
             "id": goal.id,
             "title": goal.title,
-            "plazo_dias": (goal.deadline - date.today()).days,  # calcular al vuelo
+            "plazo_dias": (goal.deadline - date.today()).days,
             "disponibilidad": goal.availability,
-            "state": goal.state
-        }
-        for goal in metas
-    ]
+            "state": goal.state,
+            "progress_percentage": progress
+        })
 
     return Response(resultado)
 
@@ -233,19 +275,31 @@ def review_objective(request, goal_id, objective_id):
     # Prompt para la IA
     prompt = f"""
 Eres un asistente que adapta planes de aprendizaje según el feedback del usuario.
+La meta general es:
+title: "{goal.title}"
+availability: "{goal.availability}"
+level: "{goal.level or 'N/A'}"
+formats: "{', '.join(goal.formats or [])}"
+session_length: "{goal.session_length or 'N/A'} minutos"
+focus: "{goal.focus or 'N/A'}"
+language: "{goal.language or 'N/A'}"
+checkpoints: "{goal.checkpoints or 'N/A'}"
+location: "{goal.country_name or 'N/A'}"
+
 El objetivo original es:
-"{objective.description}"
+title: "{objective.title}"
+description: "{objective.description}"
 
 El usuario dio este feedback:
 - Dificultad: {difficulty}
 - Interés: {interest}
-- Tiempo: {time}
+- Tiempo disponible: {time}
 - Comentario adicional: {comment}
 
 Tu tarea es reescribir o ajustar el objetivo para que:
 - Se mantenga alineado con la meta general.
 - Se adapte mejor al nivel de dificultad, interés y tiempo del usuario.
-- 1 frases de búsqueda en YouTube.
+- 1 frase de búsqueda en YouTube.
 
 Devuelve SOLO un JSON con el formato:
 {{
@@ -255,6 +309,7 @@ Devuelve SOLO un JSON con el formato:
   "youtube_search": "..."
 }}
 """
+
 
     try:
         response = client.models.generate_content(
@@ -293,7 +348,8 @@ Devuelve SOLO un JSON con el formato:
         "description": objective.description,
         "scheduled_at": objective.scheduled_at,
         "youtube_links": objective.youtube_links,
-        "status": objective.status
+        "status": objective.status,
+        "image_url": ""
     }, status=200)
 
 
@@ -332,6 +388,15 @@ def extend_goal(request, goal_id):
     prompt = f"""
 Eres un asistente que planifica objetivos diarios para metas de aprendizaje.
 Meta actual: "{goal.title}"
+Disponibilidad: "{goal.availability}"
+Nivel: "{goal.level or 'N/A'}"
+Formatos: "{', '.join(goal.formats or [])}"
+Duración de sesión: "{goal.session_length or 'N/A'} minutos"
+Enfoque: "{goal.focus or 'N/A'}"
+Idioma: "{goal.language or 'N/A'}"
+Checkpoints: "{goal.checkpoints or 'N/A'}"
+Ubicación: "{goal.country_name or 'N/A'}"
+
 Último objetivo: "{last_objective.description if last_objective else 'Ninguno'}" ({start_date.strftime('%Y-%m-%d')})
 
 Agrega {days_to_add} nuevos objetivos diarios empezando desde el día siguiente.
@@ -341,12 +406,13 @@ Agrega {days_to_add} nuevos objetivos diarios empezando desde el día siguiente.
 
 Devuelve SOLO un JSON con la clave "objectives":
 - Cada objetivo debe incluir: título, descripción, fecha y hora exacta (no solo la fecha), basadas en la disponibilidad horaria del usuario.
-- 1 frases de búsqueda en YouTube.
+- 1 frase de búsqueda en YouTube.
 [
-  {{"title": "...", "description": "...", "scheduled_at": "YYYY-MM-DD HH:MM", youtube_search": "..."}},
+  {{"title": "...", "description": "...", "scheduled_at": "YYYY-MM-DD HH:MM", "youtube_search": "..." }},
   ...
 ]
 """
+
 
     try:
         response = client.models.generate_content(
@@ -377,6 +443,7 @@ Devuelve SOLO un JSON con la clave "objectives":
             description=obj.get('description', ''),
             scheduled_at=scheduled_at,
             youtube_links=youtube_link,
+            image_url= "",
             status='pending'
         )
         created_objectives.append({
@@ -385,6 +452,7 @@ Devuelve SOLO un JSON con la clave "objectives":
             "description": new_obj.description,
             "scheduled_at": new_obj.scheduled_at,
             "youtube_links": youtube_link,
+            "image_url": new_obj.image_url,
             "status": new_obj.status
         })
 

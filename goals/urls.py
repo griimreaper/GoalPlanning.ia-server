@@ -8,7 +8,7 @@ from .views import (
     update_goal,
     update_objective,
     review_objective,
-    extend_goal
+    extend_goal,
 )
 
 urlpatterns = [
