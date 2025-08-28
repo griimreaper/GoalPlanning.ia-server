@@ -1,6 +1,13 @@
 # models.py
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+import string, secrets
+
+class UserManager(BaseUserManager):
+    def make_random_password(self, length=12):
+        chars = string.ascii_letters + string.digits + string.punctuation
+        return ''.join(secrets.choice(chars) for _ in range(length))
+
 
 class User(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=255)
@@ -8,7 +15,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
-    objects = BaseUserManager()
+    objects = UserManager()  # <-- usamos el manager personalizado
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['name']

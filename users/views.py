@@ -8,6 +8,10 @@ from django.contrib.auth.hashers import check_password
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny
 from django.db import DatabaseError
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+from rest_framework_simplejwt.tokens import RefreshToken
+import requests
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -97,3 +101,51 @@ def login(request):
             {"error": "Error generating session token"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def google(request):
+    token = request.data.get("token")
+
+    if not token:
+        return Response({"error": "Token not provided"}, status=400)
+
+    # Pedir la info a Google
+    response = requests.get(
+        GOOGLE_USERINFO_URL,
+        headers={"Authorization": f"Bearer {token}"}
+    )
+
+    if response.status_code != 200:
+        return Response({"error": "Invalid Google token"}, status=400)
+
+    user_info = response.json()
+    email = user_info["email"]
+    name = user_info.get("name", email.split("@")[0])
+
+    # Buscar o crear usuario en la base de datos
+    try:
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                "name": name,
+                "password": User.objects.make_random_password()  # clave dummy
+            }
+        )
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+    # Generar tokens JWT
+    refresh = RefreshToken.for_user(user)
+
+    return Response({
+        "refresh": str(refresh),
+        "access": str(refresh.access_token),
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name,
+        }
+    }, status=200)

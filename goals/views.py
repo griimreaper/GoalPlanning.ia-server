@@ -358,6 +358,7 @@ Devuelve SOLO un JSON con la clave "objectives":
         json_text = match.group(1) if match else raw_text
         new_objectives_data = json.loads(json_text).get("objectives", [])
     except Exception as e:
+        print(e)
         return Response({"error": "Error procesando la IA", "raw": raw_text if 'raw_text' in locals() else str(e)}, status=500)
 
     # 4️⃣ Crear los nuevos objetivos
