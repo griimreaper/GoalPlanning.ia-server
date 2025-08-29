@@ -12,6 +12,11 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework_simplejwt.tokens import RefreshToken
 import requests
+from dotenv import load_dotenv
+import os
+from django.http import HttpResponseRedirect
+
+load_dotenv()
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -149,3 +154,27 @@ def google(request):
             "name": user.name,
         }
     }, status=200)
+
+def google_callback(request):
+    code = request.GET.get("code")
+
+    if not code:
+        return HttpResponseRedirect("goalplanning://redirect?error=missing_code")
+
+    # Intercambiar code por access_token en Google
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": code,
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "client_secret":  os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": "https://tu-dominio.com/auth/google/callback/",
+        "grant_type": "authorization_code",
+    }
+    r = requests.post(token_url, data=data)
+    token_data = r.json()
+
+    # Podés enviar solo el token o también info del user
+    access_token = token_data.get("access_token")
+
+    # Deep link de vuelta a la app
+    return HttpResponseRedirect(f"goalplanning://redirect?token={access_token}")
