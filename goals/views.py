@@ -163,7 +163,7 @@ def get_goals(request):
     resultado = []
     for goal in metas:
         total_objectives = goal.objectives.count()
-        done_objectives = goal.objectives.filter(status='done').count()
+        done_objectives = goal.objectives.filter(status='completed').count()
         progress = round((done_objectives / total_objectives) * 100, 2) if total_objectives > 0 else 0
 
         resultado.append({

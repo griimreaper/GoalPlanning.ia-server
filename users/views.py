@@ -109,43 +109,32 @@ def login(request):
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def google(request):
-    token = request.data.get("token")
-
-    if not token:
-        return Response({"error": "Token not provided"}, status=400)
-
-    # Pedir la info a Google
+def process_google_user(access_token):
     response = requests.get(
         GOOGLE_USERINFO_URL,
-        headers={"Authorization": f"Bearer {token}"}
+        headers={"Authorization": f"Bearer {access_token}"}
     )
 
     if response.status_code != 200:
-        return Response({"error": "Invalid Google token"}, status=400)
+        return None, {"error": "Invalid Google token"}
 
     user_info = response.json()
     email = user_info["email"]
     name = user_info.get("name", email.split("@")[0])
 
-    # Buscar o crear usuario en la base de datos
     try:
         user, created = User.objects.get_or_create(
             email=email,
             defaults={
                 "name": name,
-                "password": User.objects.make_random_password()  # clave dummy
+                "password": User.objects.make_random_password()
             }
         )
     except Exception as e:
-        return Response({"error": str(e)}, status=500)
+        return None, {"error": str(e)}
 
-    # Generar tokens JWT
     refresh = RefreshToken.for_user(user)
-
-    return Response({
+    return {
         "refresh": str(refresh),
         "access": str(refresh.access_token),
         "user": {
@@ -153,28 +142,48 @@ def google(request):
             "email": user.email,
             "name": user.name,
         }
-    }, status=200)
+    }, None
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def google(request):
+    token = request.data.get("token")
+    if not token:
+        return Response({"error": "Token not provided"}, status=400)
+
+    data, error = process_google_user(token)
+    if error:
+        return Response(error, status=400)
+    return Response(data, status=200)
+
 
 def google_callback(request):
     code = request.GET.get("code")
-
     if not code:
         return HttpResponseRedirect("goalplanning://redirect?error=missing_code")
 
-    # Intercambiar code por access_token en Google
     token_url = "https://oauth2.googleapis.com/token"
     data = {
         "code": code,
         "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-        "client_secret":  os.getenv("GOOGLE_CLIENT_SECRET"),
-        "redirect_uri": "https://tu-dominio.com/auth/google/callback/",
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": os.getenv("ALLOWED_HOSTS") + "/auth/google/callback/",
         "grant_type": "authorization_code",
     }
     r = requests.post(token_url, data=data)
     token_data = r.json()
 
-    # Podés enviar solo el token o también info del user
     access_token = token_data.get("access_token")
+    if not access_token:
+        return HttpResponseRedirect("goalplanning://redirect?error=invalid_token")
 
-    # Deep link de vuelta a la app
-    return HttpResponseRedirect(f"goalplanning://redirect?token={access_token}")
+    # Usar la misma lógica de creación/login
+    user_data, error = process_google_user(access_token)
+    if error:
+        return HttpResponseRedirect("goalplanning://redirect?error=auth_failed")
+
+    # Retornar el token JWT ya emitido por DRF
+    return HttpResponseRedirect(
+        f"goalplanning://redirect?access={user_data['access']}&refresh={user_data['refresh']}"
+    )
